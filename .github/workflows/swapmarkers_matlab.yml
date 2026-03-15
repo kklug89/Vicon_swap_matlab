@@ -4,7 +4,7 @@
 % Ensure this part runs first when the script is executed
 
 % Get the script arguments (folder path)
-folder = 'C:\Users\Kelsey Klug\Desktop\066320C6_h_20240307\20240307\';
+folder = 'C:\path\to\your\trial\folder\';
 
 % Open Vicon
 vicon = ViconNexus();
