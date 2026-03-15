@@ -5,7 +5,7 @@
 
 % Get the script arguments (folder path)
 folder = 'C:\path\to\your\trial\folder\';
-
+ 
 % Open Vicon
 vicon = ViconNexus();
 
