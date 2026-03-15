@@ -1,0 +1,169 @@
+% swap_markers.m
+
+% Main script
+% Ensure this part runs first when the script is executed
+
+% Get the script arguments (folder path)
+folder = 'C:\Users\Kelsey Klug\Desktop\066320C6_h_20240307\20240307\';
+
+% Open Vicon
+vicon = ViconNexus();
+
+% Specify the folder
+directory_name = cellstr(folder);
+cd(directory_name{:,1});
+fileNames = dir('**/*.x1d'); 
+
+idx = 1:length(fileNames);
+
+for i = 1:length(idx)
+    trialNames{i,1} = fileNames(idx(i)).name(1:end-4);
+end
+
+% Get the subject names
+SubjectNames = vicon.GetSubjectNames();
+
+% Ensure both subjects ('body' and 'bat') are active
+assert(ismember('body', SubjectNames), 'Subject "body" not found.');
+assert(ismember('bat', SubjectNames), 'Subject "bat" not found.');
+
+% Set the current subject to 'body'
+currentSubject = 'body';
+
+% Get the list of categorized trials
+categorizedFiles = staticsandfuncs(folder);
+
+% Extract only actual trials
+actualTrials = categorizedFiles.ActualTrials;
+
+% Define the head and shoulder markers
+leftHeadMarkers = {'LFHD', 'LBHD'};
+rightHeadMarkers = {'RFHD', 'RBHD'};
+rightShoulderMarkers = {'RACR1', 'RACR2', 'RACR3'};
+leftShoulderMarkers = {'LACR1', 'LACR2', 'LACR3'};
+tempMarker = 'Temp_Marker'; % Temporary marker name for swapping
+
+% Check if the required markers exist for the body subject
+markerList = vicon.GetMarkerNames(currentSubject);
+requiredMarkers = [leftHeadMarkers, rightHeadMarkers, rightShoulderMarkers, leftShoulderMarkers];
+for marker = requiredMarkers
+    if ~ismember(marker{1}, markerList)
+        error('Required marker %s not found in the trial.', marker{1});
+    end
+end
+
+% Loop through each file found in the directory
+for jj = 1:length(trialNames)
+    trialPath = fullfile(folder, [trialNames{jj}, '.x1d']);
+    try
+        vicon.OpenTrial(trialPath, 100);
+    catch ME
+        fprintf('Error opening trial: %s\n', trialPath);
+        fprintf('Error message: %s\n', ME.message);
+        continue;
+    end
+
+    % If the current trial is not in the actualTrials list, close it and move on
+    if ~ismember([trialNames{jj}, '.x1d'], actualTrials)
+        vicon.CloseTrial();
+        continue;
+    end
+
+    % Get the number of frames in the trial
+    frameCount = vicon.GetFrameCount();
+    fprintf('Processing trial: %s with %d frames\n', trialPath, frameCount);
+
+    % Initialize a flag to check if swap is needed
+    needSwap = false;
+
+    % Get the region of interest start frame
+    [startFrame, ~] = vicon.GetTrialRegionOfInterest();
+    fprintf('Region of interest starts at frame: %d\n', startFrame);
+
+    % Get current marker positions for the head markers
+    RFHD_Pos = getMarkerPosAtFrame(vicon, currentSubject, 'RFHD', startFrame);
+    LFHD_Pos = getMarkerPosAtFrame(vicon, currentSubject, 'LFHD', startFrame);
+
+    % Get current marker positions for the shoulder markers
+    RSHO_Pos = mean(cell2mat(cellfun(@(x) getMarkerPosAtFrame(vicon, currentSubject, x, startFrame), rightShoulderMarkers, 'UniformOutput', false)), 1);
+    LSHO_Pos = mean(cell2mat(cellfun(@(x) getMarkerPosAtFrame(vicon, currentSubject, x, startFrame), leftShoulderMarkers, 'UniformOutput', false)), 1);
+
+    % Calculate distances to shoulders
+    dist_RFHD_LSHO = norm(RFHD_Pos - LSHO_Pos);
+    dist_RFHD_RSHO = norm(RFHD_Pos - RSHO_Pos);
+    dist_LFHD_RSHO = norm(LFHD_Pos - RSHO_Pos);
+    dist_LFHD_LSHO = norm(LFHD_Pos - LSHO_Pos);
+
+    % Determine if the head markers are swapped
+    if dist_RFHD_LSHO < dist_RFHD_RSHO && dist_LFHD_RSHO < dist_LFHD_LSHO
+        needSwap = true;
+        fprintf('Markers may be swapped in trial: %s\n', trialPath);
+    end
+
+    if needSwap
+        % Print details for visual inspection
+        fprintf('Visual inspection required for trial: %s\n', trialPath);
+        fprintf('RFHD to LSHO distance: %f\n', dist_RFHD_LSHO);
+        fprintf('RFHD to RSHO distance: %f\n', dist_RFHD_RSHO);
+        fprintf('LFHD to RSHO distance: %f\n', dist_LFHD_RSHO);
+        fprintf('LFHD to LSHO distance: %f\n', dist_LFHD_LSHO);
+
+        % Swap markers
+        swapMarkers(vicon, currentSubject, frameCount, leftHeadMarkers, rightHeadMarkers, tempMarker);
+        vicon.SaveTrial(trialPath);
+    end
+    vicon.CloseTrial();
+end
+
+fprintf('Finished processing all trials.\n');
+
+% Function definitions below
+function swapMarkers(vicon, currentSubject, frameCount, leftHeadMarkers, rightHeadMarkers, tempMarker)
+    for i = 1:frameCount
+        for k = 1:length(leftHeadMarkers)
+            swapMarkerNames(vicon, currentSubject, leftHeadMarkers{k}, rightHeadMarkers{k}, i, tempMarker);
+        end
+    end
+end
+
+function swapMarkerNames(vicon, subject, leftMarker, rightMarker, frame, tempMarker)
+    % Get current marker positions
+    leftMarkerPos = getMarkerPosAtFrame(vicon, subject, leftMarker, frame);
+    rightMarkerPos = getMarkerPosAtFrame(vicon, subject, rightMarker, frame);
+
+    % Rename the markers by swapping their names using a temporary name
+    vicon.SetTrajectoryAtFrame(subject, tempMarker, leftMarkerPos, frame);
+    vicon.SetTrajectoryAtFrame(subject, leftMarker, rightMarkerPos, frame);
+    vicon.SetTrajectoryAtFrame(subject, rightMarker, getMarkerPosAtFrame(vicon, subject, tempMarker, frame), frame);
+end
+
+function pos = getMarkerPosAtFrame(vicon, subject, marker, frame)
+    pos = vicon.GetTrajectoryAtFrame(subject, marker, frame);
+end
+
+function categorizedFiles = staticsandfuncs(folder)
+    % Retrieve all files with .x1d extension in the specified directory and its subdirectories
+    fileInfo = dir(fullfile(folder, '**/*.x1d'));
+
+    % Temporary arrays to hold file names for each category
+    staticsandfuncsFiles = {};
+    actualTrialsFiles = {};
+
+    for i = 1:length(fileInfo)
+        filename = fileInfo(i).name;
+
+        % Check filenames containing 'static', 'weight', or 'func'
+        if contains(filename, {'static', 'weight', 'func'})
+            % Collect filenames for 'staticsandfuncs' category
+            staticsandfuncsFiles{end+1} = filename;
+        else
+            % Collect filenames for 'Actual Trials' category
+            actualTrialsFiles{end+1} = filename;
+        end
+    end
+
+    % Assign collected filenames to the struct, creating new fields
+    categorizedFiles = struct();
+    categorizedFiles.staticsandfuncs = staticsandfuncsFiles;
+    categorizedFiles.ActualTrials = actualTrialsFiles;
+end
